@@ -1,23 +1,33 @@
-from telegram.ext import ApplicationBuilder, CommandHandler, ConversationHandler, MessageHandler, CallbackQueryHandler, filters
-from handlers.monitoring import start_monitoring, token_a_input, token_b_input, choose_mode, manual_rate_input
+import os
+from dotenv import load_dotenv
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler
+)
+from handlers.menu import show_main_menu, menu_callback_router
+from handlers.monitoring import start_monitoring  # уже реалізована сцена моніторингу
 from db import init_db
 
+# 1. Завантаження змінних з .env
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise ValueError("❌ BOT_TOKEN не знайдено в .env файлі!")
+
+# 2. Ініціалізація бази даних
 init_db()
 
-app = ApplicationBuilder().token("YOUR_TELEGRAM_BOT_TOKEN").build()
+# 3. Ініціалізація Telegram-додатку
+app = ApplicationBuilder().token(TOKEN).build()
 
-monitor_conv = ConversationHandler(
-    entry_points=[CommandHandler("monitor_pair", start_monitoring)],
-    states={
-        0: [MessageHandler(filters.TEXT & ~filters.COMMAND, token_a_input)],
-        1: [MessageHandler(filters.TEXT & ~filters.COMMAND, token_b_input)],
-        2: [CallbackQueryHandler(choose_mode)],
-        3: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_rate_input)],
-    },
-    fallbacks=[],
-)
+# 4. Команда /start — відкриває головне меню
+app.add_handler(CommandHandler("start", show_main_menu))
 
-app.add_handler(monitor_conv)
+# 5. Обробка кнопок головного меню
+app.add_handler(CallbackQueryHandler(menu_callback_router))
 
-print("Бот запущено")
+# 6. Запуск бота
+print("✅ Бот запущено. Очікуємо подій...")
 app.run_polling()
