@@ -1,56 +1,65 @@
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ConversationHandler, CallbackContext, MessageHandler, CallbackQueryHandler, filters
-from services.binance_api import get_price_usdt
-from db import add_watched_pair
+from telegram import Update
+from telegram.ext import ContextTypes, ConversationHandler
+from services.cross_rate import get_cross_rate
+from services.pair_storage import add_watched_pair
 
-TOKEN_A, TOKEN_B, CHOOSE_MODE, ENTER_RATE = range(4)
+TOKEN_A, TOKEN_B, ENTER_RATE = range(3)
+
 temp_data = {}
 
-def start_monitoring(update: Update, context: CallbackContext):
-    update.message.reply_text("Введи перший токен (наприклад, BNB):")
+async def start_monitoring_scene(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = await update.message.reply_text("Введіть перший токен (наприклад, BNB):")
+    context.user_data["scene_messages"] = [msg.message_id]
     return TOKEN_A
 
-def token_a_input(update: Update, context: CallbackContext):
-    temp_data[update.effective_user.id] = {'token_a': update.message.text.upper()}
-    update.message.reply_text("Введи другий токен (наприклад, ETH):")
+async def token_a_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    token_a = update.message.text.upper()
+    temp_data[update.effective_user.id] = {"token_a": token_a}
+    context.user_data["scene_messages"].append(update.message.message_id)
+
+    msg = await update.message.reply_text("Введіть другий токен (наприклад, ETH):")
+    context.user_data["scene_messages"].append(msg.message_id)
     return TOKEN_B
 
-def token_b_input(update: Update, context: CallbackContext):
-    temp_data[update.effective_user.id]['token_b'] = update.message.text.upper()
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Авто-розрахунок", callback_data="auto")],
-        [InlineKeyboardButton("✍️ Ввести вручну", callback_data="manual")]
-    ])
-    update.message.reply_text("Як отримати крос-курс?", reply_markup=keyboard)
-    return CHOOSE_MODE
+async def token_b_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    token_b = update.message.text.upper()
+    temp_data[update.effective_user.id]["token_b"] = token_b
+    context.user_data["scene_messages"].append(update.message.message_id)
 
-def choose_mode(update: Update, context: CallbackContext):
-    query = update.callback_query
-    query.answer()
-    user_id = query.from_user.id
-    token_a = temp_data[user_id]['token_a']
-    token_b = temp_data[user_id]['token_b']
+    msg = await update.message.reply_text("Введіть стартовий крос-курс або напишіть `auto`, щоб розрахувати автоматично:")
+    context.user_data["scene_messages"].append(msg.message_id)
+    return ENTER_RATE
 
-    if query.data == "auto":
-        price_a = get_price_usdt(token_a)
-        price_b = get_price_usdt(token_b)
-        cross_rate = price_a / price_b
-        add_watched_pair(token_a, token_b, cross_rate)
-        query.edit_message_text(f"Пара {token_a}/{token_b} додана з курсом {cross_rate:.6f}")
-        return ConversationHandler.END
-    else:
-        query.edit_message_text("Введи стартовий крос-курс вручну:")
-        return ENTER_RATE
-
-def manual_rate_input(update: Update, context: CallbackContext):
+async def enter_cross_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
+    context.user_data["scene_messages"].append(update.message.message_id)
+
+    token_a = temp_data[user_id]["token_a"]
+    token_b = temp_data[user_id]["token_b"]
+    text = update.message.text.strip()
+
     try:
-        rate = float(update.message.text)
-        token_a = temp_data[user_id]['token_a']
-        token_b = temp_data[user_id]['token_b']
-        add_watched_pair(token_a, token_b, rate)
-        update.message.reply_text(f"Пара {token_a}/{token_b} додана з курсом {rate}")
-    except ValueError:
-        update.message.reply_text("Некоректний формат. Введи число.")
+        if text.lower() == "auto":
+            cross_rate = await get_cross_rate(token_a, token_b)
+        else:
+            cross_rate = float(text)
+
+        add_watched_pair(token_a, token_b, cross_rate)
+
+        # Видаляємо всі повідомлення сцени
+        chat_id = update.effective_chat.id
+        for msg_id in context.user_data.get("scene_messages", []):
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except:
+                pass
+
+        context.user_data["scene_messages"] = []
+
+        await update.message.reply_text(f"✅ Пара {token_a}/{token_b} додана з курсом {cross_rate:.6f}")
+        return ConversationHandler.END
+
+    except Exception as e:
+        msg = await update.message.reply_text(f"❌ Помилка: {e}")
+        context.user_data["scene_messages"].append(msg.message_id)
         return ENTER_RATE
-    return ConversationHandler.END

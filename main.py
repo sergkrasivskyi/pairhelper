@@ -1,33 +1,57 @@
 import os
+import logging
 from dotenv import load_dotenv
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ConversationHandler, filters
 )
-from handlers.menu import show_main_menu, menu_callback_router
-from handlers.monitoring import start_monitoring  # уже реалізована сцена моніторингу
+from handlers.menu import show_main_menu
+from handlers.monitoring import (
+    start_monitoring_scene, token_a_input, token_b_input, enter_cross_rate,
+    TOKEN_A, TOKEN_B, ENTER_RATE
+)
 from db import init_db
 
-# 1. Завантаження змінних з .env
+# ✅ Логування напряму у bot.log
+logging.basicConfig(
+    filename="bot.log",
+    filemode="a",
+    encoding="utf-8", 
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext._application").setLevel(logging.WARNING)
+
+# ✅ Завантаження змінних
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 
 if not TOKEN:
-    raise ValueError("❌ BOT_TOKEN не знайдено в .env файлі!")
+    logger.error("❌ BOT_TOKEN не знайдено в .env файлі!")
+    exit(1)
 
-# 2. Ініціалізація бази даних
 init_db()
 
-# 3. Ініціалізація Telegram-додатку
 app = ApplicationBuilder().token(TOKEN).build()
 
-# 4. Команда /start — відкриває головне меню
+# /start → головне меню
 app.add_handler(CommandHandler("start", show_main_menu))
 
-# 5. Обробка кнопок головного меню
-app.add_handler(CallbackQueryHandler(menu_callback_router))
+# ➕ Моніторити пару
+monitor_scene = ConversationHandler(
+    entry_points=[MessageHandler(filters.Regex("^➕ Моніторити пару$"), start_monitoring_scene)],
+    states={
+        TOKEN_A: [MessageHandler(filters.TEXT & ~filters.COMMAND, token_a_input)],
+        TOKEN_B: [MessageHandler(filters.TEXT & ~filters.COMMAND, token_b_input)],
+        ENTER_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_cross_rate)],
+    },
+    fallbacks=[],
+)
 
-# 6. Запуск бота
-print("✅ Бот запущено. Очікуємо подій...")
+app.add_handler(monitor_scene)
+
+logger.info("✅ Бот запущено")
 app.run_polling()
