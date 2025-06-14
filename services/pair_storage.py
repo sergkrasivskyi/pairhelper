@@ -1,7 +1,17 @@
 import sqlite3
 from datetime import datetime
+import logging
 
 DB_PATH = "db/monitoring.db"
+
+# Налаштування логування (додаємо, якщо не ініціалізовано)
+logger = logging.getLogger(__name__)
+if not logger.hasHandlers():
+    logging.basicConfig(
+        filename="bot.log",
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
 def add_watched_pair(token_a: str, token_b: str, cross_rate: float):
     conn = sqlite3.connect(DB_PATH)
@@ -33,6 +43,9 @@ def get_all_pairs():
     c.execute("SELECT id, token_a, token_b, cross_rate, created_at FROM watched_pairs")
     rows = c.fetchall()
     conn.close()
+
+    logger.info(f"🔍 Отримано {len(rows)} пар(и) з БД")
+
     return [
         {
             "id": row[0],

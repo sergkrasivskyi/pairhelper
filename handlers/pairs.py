@@ -1,37 +1,48 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext, ConversationHandler
 from services.pair_storage import get_all_pairs, delete_pair_by_id
+import logging
+
+logger = logging.getLogger(__name__)
 
 SELECTING = 0
 
 # 🧩 Побудова інлайн-клавіатури з переліком пар
-def build_pair_selection_keyboard(pairs):
+def build_pair_selection_keyboard(pairs, selected_ids=None):
     keyboard = []
+    selected_ids = selected_ids or set()
+
     for pair in pairs:
-        # ✅ Обробляємо як словник, а не як кортеж
         pair_id = pair["id"]
         token_a = pair["token_a"]
         token_b = pair["token_b"]
-        callback_data = f"pairid_{pair_id}"  # Унікальний ID кожної кнопки
-        text = f"{token_a}/{token_b}"
-        keyboard.append([InlineKeyboardButton(text, callback_data=callback_data)])
+        is_selected = pair_id in selected_ids
 
-    # ⬇️ Додаємо кнопку підтвердження видалення
-    keyboard.append([InlineKeyboardButton("❌ Видалити обрані", callback_data="delete_selected")])
+        # ✅ Позначаємо вибрані пари
+        label = f"{'✅' if is_selected else '▫️'} {token_a}/{token_b}"
+        callback_data = f"pairid_{pair_id}"
+        keyboard.append([InlineKeyboardButton(label, callback_data=callback_data)])
+
+    # Кнопка підтвердження видалення
+    keyboard.append([
+        InlineKeyboardButton("❌ Видалити обрані", callback_data="delete_selected")
+    ])
+
     return InlineKeyboardMarkup(keyboard)
 
 # ▶️ Старт сцени перегляду пар
 async def start_pair_removal(update: Update, context: CallbackContext):
+    logger.info("▶️ Викликано start_pair_removal")
     pairs = get_all_pairs()
+    logger.info(f"🔍 Отримано {len(pairs)} пар: {pairs}")
+
     if not pairs:
         await update.message.reply_text("У вас немає пар для моніторингу.")
         return ConversationHandler.END
 
+    context.user_data["selected_pairs"] = set()
     markup = build_pair_selection_keyboard(pairs)
     await update.message.reply_text("Оберіть пари для видалення:", reply_markup=markup)
-
-    # ⏳ Створюємо тимчасовий список для обраних пар
-    context.user_data["selected_pairs"] = set()
     return SELECTING
 
 # 🔄 Обробка натискань по інлайн-кнопках
@@ -39,27 +50,34 @@ async def handle_pair_selection(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
     data = query.data
+    logger.info(f"🖱️ Обробка callback: {data}")
 
     if data.startswith("pairid_"):
         try:
-            pair_id = int(data.split("_")[1])  # ✅ Коректне виділення ID
-        except (IndexError, ValueError):
+            pair_id = int(data.split("_")[1])
+            logger.info(f"✅ Обрано/знято пару з ID: {pair_id}")
+        except (IndexError, ValueError) as e:
+            logger.error(f"❌ Помилка обробки ID пари: {e}")
             await query.edit_message_text("⚠️ Некоректні дані пари.")
             return SELECTING
 
-        # 🧠 Перемикаємо пару: обрано ↔ не обрано
         selected = context.user_data.setdefault("selected_pairs", set())
         if pair_id in selected:
             selected.remove(pair_id)
         else:
             selected.add(pair_id)
 
-        await query.edit_message_text(
-            f"Обрано пар: {len(selected)}\nНатисніть ❌ Видалити обрані, щоб підтвердити."
-        )
+        # 🔁 Перебудовуємо клавіатуру з оновленим станом
+        pairs = get_all_pairs()
+        logger.info(f"🔁 Перебудова клавіатури. Поточні вибрані: {selected}")
+        markup = build_pair_selection_keyboard(pairs, selected)
+        await query.edit_message_reply_markup(reply_markup=markup)
+        return SELECTING
 
     elif data == "delete_selected":
         selected = context.user_data.get("selected_pairs", set())
+        logger.info(f"🗑️ Видаляємо пари: {selected}")
+
         if not selected:
             await query.edit_message_text("Жодну пару не обрано.")
             return SELECTING
@@ -71,4 +89,5 @@ async def handle_pair_selection(update: Update, context: CallbackContext):
         context.user_data["selected_pairs"] = set()
         return ConversationHandler.END
 
+    logger.warning(f"⚠️ Незрозуміле callback data: {data}")
     return SELECTING
