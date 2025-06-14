@@ -13,21 +13,22 @@ def build_pair_selection_keyboard(pairs, selected_ids=None):
     selected_ids = selected_ids or set()
 
     for pair in pairs:
+        # Обробка даних як словник
         pair_id = pair["id"]
         token_a = pair["token_a"]
         token_b = pair["token_b"]
         is_selected = pair_id in selected_ids
 
-        # ✅ Позначаємо вибрані пари
+        # Формуємо назву кнопки: 
+        # ✅ якщо пара вибрана, або ▫️ якщо ні
         label = f"{'✅' if is_selected else '▫️'} {token_a}/{token_b}"
         callback_data = f"pairid_{pair_id}"
         keyboard.append([InlineKeyboardButton(label, callback_data=callback_data)])
 
-    # Кнопка підтвердження видалення
+    # Додаємо кнопку підтвердження видалення
     keyboard.append([
         InlineKeyboardButton("❌ Видалити обрані", callback_data="delete_selected")
     ])
-
     return InlineKeyboardMarkup(keyboard)
 
 # ▶️ Старт сцени перегляду пар
@@ -54,22 +55,22 @@ async def handle_pair_selection(update: Update, context: CallbackContext):
 
     if data.startswith("pairid_"):
         try:
-            pair_id = int(data.split("_")[1])
+            pair_id = int(data.split("_")[1])  # Отримуємо ID пари
             logger.info(f"✅ Обрано/знято пару з ID: {pair_id}")
         except (IndexError, ValueError) as e:
             logger.error(f"❌ Помилка обробки ID пари: {e}")
             await query.edit_message_text("⚠️ Некоректні дані пари.")
             return SELECTING
 
+        # Перемикаємо вибір: додаємо або видаляємо з набору
         selected = context.user_data.setdefault("selected_pairs", set())
         if pair_id in selected:
             selected.remove(pair_id)
         else:
             selected.add(pair_id)
 
-        # 🔁 Перебудовуємо клавіатуру з оновленим станом
+        # Перебудовуємо клавіатуру з оновленим вибором
         pairs = get_all_pairs()
-        logger.info(f"🔁 Перебудова клавіатури. Поточні вибрані: {selected}")
         markup = build_pair_selection_keyboard(pairs, selected)
         await query.edit_message_reply_markup(reply_markup=markup)
         return SELECTING
@@ -79,8 +80,9 @@ async def handle_pair_selection(update: Update, context: CallbackContext):
         logger.info(f"🗑️ Видаляємо пари: {selected}")
 
         if not selected:
+            # Якщо жодна пара не вибрана, завершуємо розмову
             await query.edit_message_text("Жодну пару не обрано.")
-            return SELECTING
+            return ConversationHandler.END
 
         for pair_id in selected:
             delete_pair_by_id(pair_id)

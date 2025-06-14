@@ -21,7 +21,7 @@ class BotReloader(FileSystemEventHandler):
 
         print("🔄 Запускаємо бота...\n")
 
-        self.log_file = open("bot.log", "a", encoding="utf-8")  # або "a" для дописування
+        self.log_file = open("bot.log", "w", encoding="utf-8")  # або "a" для дописування
         self.process = subprocess.Popen(
             [sys.executable, self.script_path],
             stdout=self.log_file,
