@@ -1,69 +1,63 @@
 #!/usr/bin/env python3
-# run_dev.py ─ автоматичний перезапуск Telegram-бота під час розробки
-# © 2025  MIT License
+# run_dev.py  ─  «гарячий» перезапуск Telegram-бота під час розробки
+# 2025 · MIT License
 
-import subprocess
-import sys
-import os
-import time
-import signal
+import os, sys, subprocess, time, signal, threading
 from pathlib import Path
 from typing import Optional
 
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
+from watchdog.events     import FileSystemEventHandler, FileSystemEvent
 
-# ────────────────────────────────────────────────
-# Налаштування
-# ────────────────────────────────────────────────
-SCRIPT_PATH = Path(sys.argv[1] if len(sys.argv) > 1 else "main.py")
-LOG_PATH    = Path("bot.log")
-DEBOUNCE_MS = 200          # перезапуск не частіше, ніж раз на 0.2 сек
+# ────────────────────────────────────────────────────────────────
+# Налаштування (можна змінити під свої вподобання)
+# ────────────────────────────────────────────────────────────────
+SCRIPT_PATH  = Path(sys.argv[1] if len(sys.argv) > 1 else "main.py")
+LOG_PATH     = Path("bot.log")
 
-WATCHED_EXT = (".py",)     # можна додати ".env" тощо
+WATCH_EXT    = (".py",)                 # стежимо лише за *.py
+IGNORE_DIR   = {"__pycache__"}          # папки, які пропускаємо
+DEBOUNCE     = 1.0                      # сек – «згортка» частих подій
 
-
-# ────────────────────────────────────────────────
-# Допоміжні функції
-# ────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 def is_ignored(path: Path) -> bool:
-    """Пропускати приховані файли, __pycache__, тимчасові правки редакторів."""
-    name = path.name
-    if name.startswith(".") or name.endswith(("~", ".swp", ".tmp")):
+    """Чи пропустити файл/директорію (службові, тимчасові тощо)."""
+    if path.is_dir() and path.name in IGNORE_DIR:
         return True
-    if "__pycache__" in path.parts:
+    if any(part in IGNORE_DIR for part in path.parts):
+        return True
+    if not path.suffix.lower() in WATCH_EXT:
         return True
     return False
 
-
-# ────────────────────────────────────────────────
-# Клас-релоадер
-# ────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 class BotReloader(FileSystemEventHandler):
+    """Спостерігає за файлами → рестартує бота при зміні."""
     def __init__(self, script: Path):
-        self.script: Path = script
-        self.proc:  Optional[subprocess.Popen] = None
-        self.last_event = 0.0               # час останнього перезапуску (для debounce)
+        self.script = script
+        self.proc: Optional[subprocess.Popen[str]] = None
+        self.last_change = 0.0           # для debounce
         self.start_bot()
 
-    # ── Запуск / перезапуск
+    # ── запуск / перезапуск ────────────────────────────────────
     def start_bot(self) -> None:
-        self.stop_bot()                     # зупинимо, якщо вже є
+        self.stop_bot()
+
         print("🔄  Запускаємо бота…")
         LOG_PATH.parent.mkdir(exist_ok=True)
+
         self.proc = subprocess.Popen(
             [sys.executable, str(self.script)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            encoding="utf-8"
+            stdout = subprocess.PIPE,
+            stderr = subprocess.STDOUT,
+            text   = True,
+            encoding = "utf-8",
+            bufsize  = 1
         )
-        # Дублікуємо output у термінал + log-файл
-        self._pipe_output()
+        self._pipe_output()              # дублюємо stdout у лог
 
     def stop_bot(self) -> None:
-        if not self.proc:
+        if self.proc is None:
             return
         print("🛑  Зупиняємо бота…")
         self.proc.terminate()
@@ -73,33 +67,33 @@ class BotReloader(FileSystemEventHandler):
             self.proc.kill()
         self.proc = None
 
-    # ── Обробка події файлової системи
+    # ── File-watch callback ────────────────────────────────────
     def on_modified(self, event: FileSystemEvent) -> None:
         path = Path(event.src_path)
-        if is_ignored(path) or path.suffix not in WATCHED_EXT:
+        if is_ignored(path):
             return
+
         now = time.time()
-        if (now - self.last_event) * 1000 < DEBOUNCE_MS:      # debounce
+        if now - self.last_change < DEBOUNCE:        # згортка подій
             return
-        self.last_event = now
-        print(f"💡  Зміна у файлі: {path}")
+        self.last_change = now
+
+        print(f"💡  Зміна у файлі: {path.relative_to(Path.cwd())}")
         self.start_bot()
 
-    # ── Читаємо stdout бота і дублюємо
+    # ── дублюємо stdout бота у консоль + bot.log ───────────────
     def _pipe_output(self) -> None:
         assert self.proc and self.proc.stdout
-        log_file = LOG_PATH.open("w", encoding="utf-8")
+        log_file = LOG_PATH.open("a", encoding="utf-8")
+
         def _pump():
             with self.proc.stdout, log_file:
                 for line in self.proc.stdout:
                     print(line.rstrip())
                     log_file.write(line)
-        import threading; threading.Thread(target=_pump, daemon=True).start()
+        threading.Thread(target=_pump, daemon=True).start()
 
-
-# ────────────────────────────────────────────────
-# Точка входу
-# ────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 def main() -> None:
     if not SCRIPT_PATH.exists():
         sys.exit(f"❌  {SCRIPT_PATH} не знайдено")
@@ -111,10 +105,9 @@ def main() -> None:
     observer.schedule(handler, path=".", recursive=True)
     observer.start()
 
-    # ⌨️ Ctrl-C — красиво завершуємо
     try:
         while True:
-            time.sleep(1)
+            time.sleep(1.0)
     except KeyboardInterrupt:
         print("\n⛔  Зупинено вручну.")
     finally:
@@ -122,6 +115,6 @@ def main() -> None:
         observer.join()
         handler.stop_bot()
 
-
+# ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()
